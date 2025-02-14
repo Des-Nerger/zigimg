@@ -652,7 +652,7 @@ pub const ReaderProcessor = struct {
         const ptr_info = @typeInfo(Ptr);
 
         std.debug.assert(ptr_info == .pointer); // Must be a pointer
-        std.debug.assert(ptr_info.pointer.size == .One); // Must be a single-item pointer
+        std.debug.assert(ptr_info.pointer.size == .one); // Must be a single-item pointer
 
         const gen = struct {
             fn chunkProcessor(ptr: *anyopaque, data: *ChunkProcessData) ImageUnmanaged.ReadError!PixelFormat {
@@ -962,7 +962,8 @@ else
         }
     };
 
-pub const NoopAllocator = Allocator.VTable{ .alloc = undefined, .free = undefined, .resize = undefined };
+pub const NoopAllocator =
+    Allocator.VTable{ .alloc = undefined, .free = undefined, .remap = undefined, .resize = undefined };
 
 /// Applications can override this by defining DefaultPngOptions struct in their root source file.
 /// We would like to use FixedBufferAllocator with memory from stack here since we should be able
