@@ -11,6 +11,7 @@ const PixelFormat = @import("../pixel_format.zig").PixelFormat;
 const iff_description_length = 12;
 const IFFMagicHeader = "FORM";
 const ILBMMagicHeader = "ILBM";
+const ACBMMagicHeader = "ACBM";
 const PBMMagicHeader = "PBM ";
 
 pub const Chunk = struct {
@@ -28,6 +29,7 @@ pub const Chunks = struct {
     pub const BODY = Chunk.init("BODY");
     pub const CAMG = Chunk.init("CAMG");
     pub const CMAP = Chunk.init("CMAP");
+    pub const ABIT = Chunk.init("ABIT");
 };
 
 pub fn getILBMFormatId(stream: *ImageUnmanaged.Stream) ImageUnmanaged.ReadError!Format {
@@ -38,9 +40,17 @@ pub fn getILBMFormatId(stream: *ImageUnmanaged.Stream) ImageUnmanaged.ReadError!
     if (!is_iff) {
         return ImageUnmanaged.ReadError.InvalidData;
     }
-    const format = if (std.mem.eql(u8, magic_buffer[8..], PBMMagicHeader[0..])) Format.pbm else Format.ilbm;
 
-    return format;
+    if (std.mem.eql(u8, magic_buffer[8..], PBMMagicHeader[0..]))
+        return Format.pbm;
+
+    if (std.mem.eql(u8, magic_buffer[8..], ILBMMagicHeader[0..]))
+        return Format.ilbm;
+
+    if (std.mem.eql(u8, magic_buffer[8..], ACBMMagicHeader[0..]))
+        return Format.acbm;
+
+    return ImageUnmanaged.ReadError.InvalidData;
 }
 
 pub fn loadHeader(stream: *ImageUnmanaged.Stream) ImageUnmanaged.ReadError!BitmapHeader {
@@ -110,7 +120,9 @@ pub const Format = enum(u8) {
     ilbm = 0,
     // PC-DeluxePaint chunky format
     pbm = 1,
-    bad = 2,
+    // AmigaBasic non-interleaved ACBM
+    acbm = 2,
+    bad = 3,
 };
 
 pub const BitmapHeader = extern struct {
@@ -183,7 +195,7 @@ pub const ILBM = struct {
 
     pub fn pixelFormat(self: *ILBM) ImageUnmanaged.Error!PixelFormat {
         if (ViewportMode.isHam(self.viewportMode) or self.header.planes == 24) {
-            return PixelFormat.rgba32;
+            return PixelFormat.rgb24;
         } else if (self.header.planes <= 8) {
             return PixelFormat.indexed8;
         } else {
@@ -248,7 +260,7 @@ pub const ILBM = struct {
         while (true) {
             const chunk = try utils.readStruct(reader, ChunkHeader, .big);
             switch (chunk.type) {
-                Chunks.BODY.id => return try self.decodeBODYChunk(stream, &chunk, allocator),
+                Chunks.ABIT.id, Chunks.BODY.id => return try self.decodePixelChunk(stream, &chunk, allocator),
                 Chunks.CAMG.id => try self.decodeCAMGChunk(stream),
                 Chunks.CMAP.id => try self.decodeCMAPChunk(stream, &chunk),
                 // skip unsupported chunks
@@ -344,22 +356,45 @@ pub const ILBM = struct {
 
         @memset(chunky_buffer, 0);
 
-        for (0..h) |y| {
-            const scanline = y * w;
+        if (self.format_id == .ilbm) {
+            for (0..h) |y| {
+                const scanline = y * w;
+                for (0..planes) |p| {
+                    const plane_mask: u8 = @as(u8, 1) << @intCast(p % 8);
+                    // Atari bitplanes are stored plane by plane, Amiga bitplanes are interleaved
+                    const offset_base = if (!is_vertical) (pitch * planes * y) + (p * pitch) else p * header.height * pitch + y * pitch;
+                    for (0..pitch) |i| {
+                        const bit = bitplanes[offset_base + i];
+                        const rgb_shift = p / 8;
+
+                        for (0..8) |b| {
+                            const mask = @as(u8, 1) << @intCast((@as(u8, 7) - b));
+                            if ((bit & mask) > 0) {
+                                const x = (i * 8) + b;
+                                const offset = (scanline * pixel_size) + (x * pixel_size) + rgb_shift;
+                                chunky_buffer[offset] |= plane_mask;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
             for (0..planes) |p| {
                 const plane_mask: u8 = @as(u8, 1) << @intCast(p % 8);
-                // Atari bitplanes are stored plane by plane, Amiga bitplanes are interleaved
-                const offset_base = if (!is_vertical) (pitch * planes * y) + (p * pitch) else p * header.height * pitch + y * pitch;
-                for (0..pitch) |i| {
-                    const bit = bitplanes[offset_base + i];
-                    const rgb_shift = p / 8;
+                for (0..h) |y| {
+                    const scanline = y * w;
+                    const offset_base = (p * pitch * h) + pitch * y;
+                    for (0..pitch) |i| {
+                        const bit = bitplanes[offset_base + i];
+                        const rgb_shift = p / 8;
 
-                    for (0..8) |b| {
-                        const mask = @as(u8, 1) << @intCast((@as(u8, 7) - b));
-                        if ((bit & mask) > 0) {
-                            const x = (i * 8) + b;
-                            const offset = (scanline * pixel_size) + (x * pixel_size) + rgb_shift;
-                            chunky_buffer[offset] |= plane_mask;
+                        for (0..8) |b| {
+                            const mask = @as(u8, 1) << @intCast((@as(u8, 7) - b));
+                            if ((bit & mask) > 0) {
+                                const x = (i * 8) + b;
+                                const offset = (scanline * pixel_size) + (x * pixel_size) + rgb_shift;
+                                chunky_buffer[offset] |= plane_mask;
+                            }
                         }
                     }
                 }
@@ -399,7 +434,7 @@ pub const ILBM = struct {
         }
     }
 
-    pub fn decodeBODYChunk(self: *ILBM, stream: *ImageUnmanaged.Stream, chunk: *const ChunkHeader, allocator: std.mem.Allocator) !color.PixelStorage {
+    pub fn decodePixelChunk(self: *ILBM, stream: *ImageUnmanaged.Stream, chunk: *const ChunkHeader, allocator: std.mem.Allocator) !color.PixelStorage {
         std.debug.assert(self.pitch != 0);
 
         const pixel_format = try self.pixelFormat();
@@ -417,7 +452,16 @@ pub const ILBM = struct {
 
         // first uncompress planes data if needed
         switch (self.header.compression_type) {
-            CompressionType.byterun => try decodeByteRun1(stream, tmp_buffer, chunk.length),
+            CompressionType.byterun => {
+                if (self.format_id == Format.acbm) {
+                    // ACBM's ABIT body is not compressed even though
+                    // the header's compress method is set to 1
+                    const reader = stream.reader();
+                    _ = try reader.readAll(tmp_buffer);
+                } else {
+                    try decodeByteRun1(stream, tmp_buffer, chunk.length);
+                }
+            },
             CompressionType.byterun2 => try self.decodeByteRun2(stream, tmp_buffer, allocator),
             else => {
                 const reader = stream.reader();
@@ -442,7 +486,7 @@ pub const ILBM = struct {
                     palette[index] = self.palette.data[index];
                 }
             },
-            .rgba32 => |storage| {
+            .rgb24 => |storage| {
                 const is_ham = ViewportMode.isHam(self.viewportMode);
                 const planes = self.header.planes;
                 const cmap_bits: u3 = @truncate(self.cmap_bits);
@@ -454,15 +498,13 @@ pub const ILBM = struct {
                     // Keep color: in HAM mode, current color
                     // may be based on previous color instead of coming from
                     // the palette.
-                    var previous_color = color.Rgba32.initRgb(0, 0, 0);
+                    var previous_color = color.Rgb24.initRgb(0, 0, 0);
                     for (0..self.width()) |col| {
                         const index = (self.width() * row * pixel_size) + (col * pixel_size);
                         if (planes == 24) {
-                            previous_color = color.Rgba32.initRgb(chunky_buffer[index], chunky_buffer[index + 1], chunky_buffer[index + 2]);
+                            previous_color = color.Rgb24.initRgb(chunky_buffer[index], chunky_buffer[index + 1], chunky_buffer[index + 2]);
                         } else if (chunky_buffer[index] < palette.len) {
-                            previous_color = palette[chunky_buffer[index]];
-                            if (self.header.mask_type == MaskType.has_transparent_color and chunky_buffer[index] == self.header.transparent_color)
-                                previous_color.a = 0;
+                            previous_color = color.Rgb24.fromU32Rgba(palette[chunky_buffer[index]].toU32Rgba());
                         } else if (is_ham) {
                             // Get the control bit which will tell use how current pixel should be calculated
                             const control: u8 = (chunky_buffer[index] >> cmap_bits) & 0x3;
