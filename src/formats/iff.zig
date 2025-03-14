@@ -13,6 +13,7 @@ const IFFMagicHeader = "FORM";
 const ILBMMagicHeader = "ILBM";
 const ACBMMagicHeader = "ACBM";
 const PBMMagicHeader = "PBM ";
+const DEEPMMagicHeader = "DEEP";
 
 pub const Chunk = struct {
     id: u32,
@@ -30,54 +31,10 @@ pub const Chunks = struct {
     pub const CAMG = Chunk.init("CAMG");
     pub const CMAP = Chunk.init("CMAP");
     pub const ABIT = Chunk.init("ABIT");
+    // DEEP specific chunks
+    pub const DGBL = Chunk.init("DBGL");
+    pub const DLOC = Chunk.init("DLOC");
 };
-
-pub fn getILBMFormatId(stream: *ImageUnmanaged.Stream) ImageUnmanaged.ReadError!Format {
-    var magic_buffer: [iff_description_length]u8 = undefined;
-
-    _ = try stream.reader().readAll(magic_buffer[0..]);
-    const is_iff = std.mem.eql(u8, magic_buffer[0..4], IFFMagicHeader[0..]);
-    if (!is_iff) {
-        return ImageUnmanaged.ReadError.InvalidData;
-    }
-
-    if (std.mem.eql(u8, magic_buffer[8..], PBMMagicHeader[0..]))
-        return Format.pbm;
-
-    if (std.mem.eql(u8, magic_buffer[8..], ILBMMagicHeader[0..]))
-        return Format.ilbm;
-
-    if (std.mem.eql(u8, magic_buffer[8..], ACBMMagicHeader[0..]))
-        return Format.acbm;
-
-    return ImageUnmanaged.ReadError.InvalidData;
-}
-
-pub fn loadHeader(stream: *ImageUnmanaged.Stream) ImageUnmanaged.ReadError!BitmapHeader {
-    var reader = stream.reader();
-    const chunk = try utils.readStruct(reader, ChunkHeader, .big);
-    if (chunk.type != Chunks.BMHD.id) return ImageUnmanaged.ReadError.InvalidData;
-    if (chunk.length != @sizeOf(BitmapHeader)) return ImageUnmanaged.ReadError.InvalidData;
-
-    var header_data: [@sizeOf(BitmapHeader)]u8 = undefined;
-    try reader.readNoEof(&header_data);
-
-    var struct_stream = std.io.fixedBufferStream(&header_data);
-
-    const header = try utils.readStruct(struct_stream.reader(), BitmapHeader, .big);
-
-    return header;
-}
-
-pub fn extendEhbPalette(palette: *utils.FixedStorage(color.Rgba32, 256)) void {
-    palette.resize(64);
-    const data = palette.data;
-    for (0..32) |i| {
-        const c = data[i];
-        // EHB mode extends the palette to 64 colors by adding 32 darker colors
-        data[i + 32] = color.Rgba32.initRgb(c.r >> 1, c.g >> 1, c.b >> 1);
-    }
-}
 
 pub const ChunkHeader = extern struct {
     type: u32 align(1),
@@ -90,11 +47,19 @@ pub const ChunkHeader = extern struct {
     }
 };
 
-pub const CompressionType = enum(u8) {
+pub const IlbmCompressionType = enum(u8) {
     none = 0,
     byterun = 1,
     // Atari-ST files
     byterun2 = 2,
+};
+
+pub const DeepCompressionType = enum(u16) {
+    none = 0,
+    rle = 1,
+    huffman = 2,
+    dynamic_chuff = 3,
+    jpeg = 4,
 };
 
 pub const MaskType = enum(u8) {
@@ -115,24 +80,26 @@ pub const ViewportMode = enum(u32) {
     }
 };
 
-pub const Format = enum(u8) {
-    // Amiga interleaved format
+pub const IffForm = enum(u8) {
+    // Amiga line-interleaved format
     ilbm = 0,
     // PC-DeluxePaint chunky format
     pbm = 1,
-    // AmigaBasic non-interleaved ACBM
+    // AmigaBasic plane-interleaved format
     acbm = 2,
-    bad = 3,
+    // TVPaint/Aura .deep files
+    deep = 3,
+    bad = 4,
 };
 
-pub const BitmapHeader = extern struct {
+pub const BmhdHeader = extern struct {
     width: u16 = 0,
     height: u16 = 0,
     x: i16 = 0,
     y: i16 = 0,
     planes: u8 = 0,
     mask_type: MaskType = .none,
-    compression_type: CompressionType = .none,
+    compression_type: IlbmCompressionType = .none,
     pad: u8 = 0,
     transparent_color: u16 = 0,
     x_asoect: u8 = 0,
@@ -142,12 +109,115 @@ pub const BitmapHeader = extern struct {
 
     const Self = @This();
 
-    pub const HeaderSize = @sizeOf(BitmapHeader);
+    pub const HeaderSize = @sizeOf(BmhdHeader);
 
     pub fn debug(self: *const Self) void {
         std.debug.print("Width: {}, Height: {}, planes: {}, compression: {}\n", .{ self.width, self.height, self.planes, self.compression_type });
     }
 };
+
+pub const DgblHeader = extern struct {
+    width: u16 = 0,
+    height: u16 = 0,
+    compression_type: DeepCompressionType = .none,
+    x_aspect: u8 = 0,
+    y_aspect: u8 = 0,
+
+    const Self = @This();
+
+    pub fn debug(self: *const Self) void {
+        std.debug.print("Width: {}, Height: {}, compression: {}\n", .{ self.width, self.height, self.compression_type });
+    }
+};
+
+const Header = enum { bmhd, dgbl };
+
+pub const IffHeader = union(Header) {
+    bmhd: BmhdHeader,
+    dgbl: DgblHeader,
+
+    fn width(self: IffHeader) u16 {
+        return switch (self) {
+            IffHeader.dgbl => |dgbl| dgbl.width,
+            IffHeader.bmhd => |bmhd| bmhd.width,
+        };
+    }
+
+    fn height(self: IffHeader) u16 {
+        return switch (self) {
+            IffHeader.dgbl => |dgbl| dgbl.height,
+            IffHeader.bmhd => |bmhd| bmhd.height,
+        };
+    }
+
+    fn debug(self: IffHeader) void {
+        switch (self) {
+            IffHeader.dgbl => |dgbl| dgbl.debug(),
+            IffHeader.bmhd => |bmhd| bmhd.debug(),
+        }
+    }
+};
+
+pub fn getIffFormId(stream: *ImageUnmanaged.Stream) ImageUnmanaged.ReadError!IffForm {
+    var magic_buffer: [iff_description_length]u8 = undefined;
+
+    _ = try stream.reader().readAll(magic_buffer[0..]);
+    const is_iff = std.mem.eql(u8, magic_buffer[0..4], IFFMagicHeader[0..]);
+    if (!is_iff) {
+        return ImageUnmanaged.ReadError.InvalidData;
+    }
+
+    if (std.mem.eql(u8, magic_buffer[8..], PBMMagicHeader[0..]))
+        return IffForm.pbm;
+
+    if (std.mem.eql(u8, magic_buffer[8..], ILBMMagicHeader[0..]))
+        return IffForm.ilbm;
+
+    if (std.mem.eql(u8, magic_buffer[8..], ACBMMagicHeader[0..]))
+        return IffForm.acbm;
+
+    return ImageUnmanaged.ReadError.InvalidData;
+}
+
+pub fn decodeBmhdChunk(stream: *ImageUnmanaged.Stream) ImageUnmanaged.ReadError!BmhdHeader {
+    var reader = stream.reader();
+    const chunk = try utils.readStruct(reader, ChunkHeader, .big);
+    if (chunk.type != Chunks.BMHD.id) return ImageUnmanaged.ReadError.InvalidData;
+    if (chunk.length != @sizeOf(BmhdHeader)) return ImageUnmanaged.ReadError.InvalidData;
+
+    var header_data: [@sizeOf(BmhdHeader)]u8 = undefined;
+    try reader.readNoEof(&header_data);
+
+    var struct_stream = std.io.fixedBufferStream(&header_data);
+
+    const header = try utils.readStruct(struct_stream.reader(), BmhdHeader, .big);
+
+    return header;
+}
+
+pub fn decodeDbglChunk(_: *ImageUnmanaged.Stream) ImageUnmanaged.ReadError!DgblHeader {
+    return DgblHeader{
+        .width = 0,
+        .height = 0,
+        .compression_type = .none,
+        .x_aspect = 0,
+        .y_aspect = 0,
+    };
+}
+
+pub fn loadHeader(stream: *ImageUnmanaged.Stream, form_id: IffForm) ImageUnmanaged.ReadError!IffHeader {
+    return if (form_id == IffForm.deep) IffHeader{ .dgbl = try decodeDbglChunk(stream) } else IffHeader{ .bmhd = try decodeBmhdChunk(stream) };
+}
+
+pub fn extendEhbPalette(palette: *utils.FixedStorage(color.Rgba32, 256)) void {
+    palette.resize(64);
+    const data = palette.data;
+    for (0..32) |i| {
+        const c = data[i];
+        // EHB mode extends the palette to 64 colors by adding 32 darker colors
+        data[i + 32] = color.Rgba32.initRgb(c.r >> 1, c.g >> 1, c.b >> 1);
+    }
+}
 
 pub fn decodeByteRun1(stream: *ImageUnmanaged.Stream, tmp_buffer: []u8, length: u32) !void {
     const reader = stream.reader();
@@ -177,26 +247,27 @@ pub fn decodeByteRun1(stream: *ImageUnmanaged.Stream, tmp_buffer: []u8, length: 
     }
 }
 
-pub const ILBM = struct {
+pub const IFF = struct {
     cmap_bits: u8 = 0,
-    format_id: Format = undefined,
-    header: BitmapHeader = undefined,
+    form_id: IffForm = undefined,
+    header: IffHeader = undefined,
     palette: utils.FixedStorage(color.Rgba32, 256) = .{},
     pitch: u16 = 0,
+    pixel_byte_size: u8 = 0,
     viewportMode: u32 = 0,
 
-    pub fn width(self: *ILBM) usize {
-        return self.header.width;
+    pub fn width(self: *IFF) usize {
+        return self.header.width();
     }
 
-    pub fn height(self: *ILBM) usize {
-        return self.header.height;
+    pub fn height(self: *IFF) usize {
+        return self.header.height();
     }
 
-    pub fn pixelFormat(self: *ILBM) ImageUnmanaged.Error!PixelFormat {
-        if (ViewportMode.isHam(self.viewportMode) or self.header.planes == 24) {
+    pub fn pixelFormat(self: *IFF) ImageUnmanaged.Error!PixelFormat {
+        if (ViewportMode.isHam(self.viewportMode) or self.header.bmhd.planes == 24) {
             return PixelFormat.rgb24;
-        } else if (self.header.planes <= 8) {
+        } else if (self.header.bmhd.planes <= 8) {
             return PixelFormat.indexed8;
         } else {
             return ImageUnmanaged.Error.Unsupported;
@@ -212,9 +283,9 @@ pub const ILBM = struct {
     }
 
     pub fn formatDetect(stream: *ImageUnmanaged.Stream) !bool {
-        const format_id = getILBMFormatId(stream) catch Format.bad;
+        const form_id = getIffFormId(stream) catch IffForm.bad;
 
-        if (format_id == .bad) {
+        if (form_id == .bad) {
             return false;
         } else {
             return true;
@@ -225,13 +296,13 @@ pub const ILBM = struct {
         var result = ImageUnmanaged{};
         errdefer result.deinit(allocator);
 
-        var ilbm = ILBM{};
+        var iff = IFF{};
 
-        const pixels = try ilbm.read(stream, allocator);
+        const pixels = try iff.read(stream, allocator);
 
         result.pixels = pixels;
-        result.width = ilbm.width();
-        result.height = ilbm.height();
+        result.width = iff.width();
+        result.height = iff.height();
 
         return result;
     }
@@ -243,10 +314,10 @@ pub const ILBM = struct {
         _ = encoder_options;
     }
 
-    pub fn read(self: *ILBM, stream: *ImageUnmanaged.Stream, allocator: std.mem.Allocator) ImageUnmanaged.ReadError!color.PixelStorage {
-        self.format_id = try getILBMFormatId(stream);
-        self.header = try loadHeader(stream);
-        self.pitch = (std.math.divCeil(u16, self.header.width, 16) catch 0) * 2;
+    pub fn read(self: *IFF, stream: *ImageUnmanaged.Stream, allocator: std.mem.Allocator) ImageUnmanaged.ReadError!color.PixelStorage {
+        self.form_id = try getIffFormId(stream);
+        self.header = try loadHeader(stream, self.form_id);
+        self.pitch = (std.math.divCeil(u16, self.header.width(), 16) catch 0) * 2;
         self.header.debug();
 
         const pixels = try self.decodeChunks(stream, allocator);
@@ -254,13 +325,13 @@ pub const ILBM = struct {
         return pixels;
     }
 
-    pub fn decodeChunks(self: *ILBM, stream: *ImageUnmanaged.Stream, allocator: std.mem.Allocator) !color.PixelStorage {
+    pub fn decodeChunks(self: *IFF, stream: *ImageUnmanaged.Stream, allocator: std.mem.Allocator) !color.PixelStorage {
         const reader = stream.reader();
         const end_pos = try stream.getEndPos();
         while (true) {
             const chunk = try utils.readStruct(reader, ChunkHeader, .big);
             switch (chunk.type) {
-                Chunks.ABIT.id, Chunks.BODY.id => return try self.decodePixelChunk(stream, &chunk, allocator),
+                Chunks.ABIT.id, Chunks.BODY.id => return try self.decodeILBMPixelChunk(stream, &chunk, allocator),
                 Chunks.CAMG.id => try self.decodeCAMGChunk(stream),
                 Chunks.CMAP.id => try self.decodeCMAPChunk(stream, &chunk),
                 // skip unsupported chunks
@@ -274,8 +345,8 @@ pub const ILBM = struct {
         return ImageUnmanaged.Error.Unsupported;
     }
 
-    pub fn decodeByteRun2(self: *ILBM, stream: *ImageUnmanaged.Stream, tmp_buffer: []u8, allocator: std.mem.Allocator) !void {
-        const header = self.header;
+    pub fn decodeByteRun2(self: *IFF, stream: *ImageUnmanaged.Stream, tmp_buffer: []u8, allocator: std.mem.Allocator) !void {
+        const header = self.header.bmhd;
         const pitch = self.pitch;
         const reader = stream.reader();
 
@@ -335,28 +406,28 @@ pub const ILBM = struct {
         }
     }
 
-    pub fn planarToChunky(self: *ILBM, bitplanes: []u8, chunky_buffer: []u8) !void {
-        const header = self.header;
+    pub fn planarToChunky(self: *IFF, bitplanes: []u8, chunky_buffer: []u8) !void {
+        const header = self.header.bmhd;
         const planes = header.planes;
         const w = header.width;
         const h = header.height;
         const pitch = self.pitch;
         const dest_len = chunky_buffer.len;
-        const is_vertical = header.compression_type == CompressionType.byterun2;
+        const is_vertical = header.compression_type == IlbmCompressionType.byterun2;
         // pixel_size in bytes in the buffer:
         // 1 (the cmap index) for indexed mode
         // 3 (r, g, b components) for 24bit mode
         const pixel_size: u8 = @max(1, planes / 8);
 
         // we already have a chunky buffer: no need to convert to planar
-        if (self.format_id == .pbm) {
+        if (self.form_id == .pbm) {
             @memcpy(chunky_buffer[0..dest_len], bitplanes[0..dest_len]);
             return;
         }
 
         @memset(chunky_buffer, 0);
 
-        if (self.format_id == .ilbm) {
+        if (self.form_id == .ilbm) {
             for (0..h) |y| {
                 const scanline = y * w;
                 for (0..planes) |p| {
@@ -402,12 +473,12 @@ pub const ILBM = struct {
         }
     }
 
-    pub fn decodeCAMGChunk(self: *ILBM, stream: *ImageUnmanaged.Stream) !void {
+    pub fn decodeCAMGChunk(self: *IFF, stream: *ImageUnmanaged.Stream) !void {
         const reader = stream.reader();
         self.viewportMode = try reader.readInt(u32, .big);
     }
 
-    pub fn decodeCMAPChunk(self: *ILBM, stream: *ImageUnmanaged.Stream, chunk: *const ChunkHeader) !void {
+    pub fn decodeCMAPChunk(self: *IFF, stream: *ImageUnmanaged.Stream, chunk: *const ChunkHeader) !void {
         const num_colors = chunk.length / 3;
         const reader = stream.reader();
         self.palette.resize(num_colors);
@@ -420,9 +491,9 @@ pub const ILBM = struct {
         self.cmap_bits = std.math.log2_int_ceil(usize, palette.len);
     }
 
-    pub fn reduceHamPalette(self: *ILBM) void {
+    pub fn reduceHamPalette(self: *IFF) void {
         var bits = self.cmap_bits;
-        const planes = self.header.planes;
+        const planes = self.header.bmhd.planes;
 
         if (bits > planes) {
             bits -= (bits - planes) + 2;
@@ -434,26 +505,28 @@ pub const ILBM = struct {
         }
     }
 
-    pub fn decodePixelChunk(self: *ILBM, stream: *ImageUnmanaged.Stream, chunk: *const ChunkHeader, allocator: std.mem.Allocator) !color.PixelStorage {
+    // Decode BODY/ABIT chunks from IFF-ILBM files
+    pub fn decodeILBMPixelChunk(self: *IFF, stream: *ImageUnmanaged.Stream, chunk: *const ChunkHeader, allocator: std.mem.Allocator) !color.PixelStorage {
         std.debug.assert(self.pitch != 0);
 
         const pixel_format = try self.pixelFormat();
+        const bmhd = self.header.bmhd;
         var pixels = try color.PixelStorage.init(allocator, pixel_format, self.width() * self.height());
         errdefer pixels.deinit(allocator);
 
-        const tmp_buffer: []u8 = try allocator.alloc(u8, self.pitch * self.height() * self.header.planes);
+        const tmp_buffer: []u8 = try allocator.alloc(u8, self.pitch * self.height() * bmhd.planes);
         defer allocator.free(tmp_buffer);
 
         var buffer_size = self.width() * self.height();
-        if (self.header.planes == 24)
+        if (bmhd.planes == 24)
             buffer_size *= 3;
         const chunky_buffer: []u8 = try allocator.alloc(u8, buffer_size);
         defer allocator.free(chunky_buffer);
 
         // first uncompress planes data if needed
-        switch (self.header.compression_type) {
-            CompressionType.byterun => {
-                if (self.format_id == Format.acbm) {
+        switch (bmhd.compression_type) {
+            IlbmCompressionType.byterun => {
+                if (self.form_id == IffForm.acbm) {
                     // ACBM's ABIT body is not compressed even though
                     // the header's compress method is set to 1
                     const reader = stream.reader();
@@ -462,7 +535,7 @@ pub const ILBM = struct {
                     try decodeByteRun1(stream, tmp_buffer, chunk.length);
                 }
             },
-            CompressionType.byterun2 => try self.decodeByteRun2(stream, tmp_buffer, allocator),
+            IlbmCompressionType.byterun2 => try self.decodeByteRun2(stream, tmp_buffer, allocator),
             else => {
                 const reader = stream.reader();
                 _ = try reader.readAll(tmp_buffer);
@@ -488,7 +561,7 @@ pub const ILBM = struct {
             },
             .rgb24 => |storage| {
                 const is_ham = ViewportMode.isHam(self.viewportMode);
-                const planes = self.header.planes;
+                const planes = self.header.bmhd.planes;
                 const cmap_bits: u3 = @truncate(self.cmap_bits);
                 const pad_bits: u3 = @truncate(8 - self.cmap_bits);
                 const palette = self.palette.data;
