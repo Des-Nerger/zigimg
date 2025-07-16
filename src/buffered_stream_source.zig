@@ -16,7 +16,7 @@ pub fn BufferedStreamSourceReader(comptime BufferSize: usize) type {
 
         const Self = @This();
 
-        pub const Reader = std.io.Reader(*Self, ReadError, read);
+        pub const Reader = std.io.GenericReader(*Self, ReadError, read);
         pub const SeekableStream = std.io.SeekableStream(
             *Self,
             SeekError,
@@ -137,7 +137,7 @@ pub fn BufferedStreamSourceWriter(comptime BufferSize: usize) type {
 
         const Self = @This();
 
-        pub const Writer = std.io.Writer(*Self, WriteError, write);
+        pub const Writer = std.io.GenericWriter(*Self, WriteError, write);
         pub const SeekableStream = std.io.SeekableStream(
             *Self,
             SeekError,
@@ -183,7 +183,7 @@ pub fn BufferedStreamSourceWriter(comptime BufferSize: usize) type {
                     if (amt < 0) {
                         const abs_amt = @abs(amt);
                         if (abs_amt <= self.buffered_writer.end) {
-                            self.buffered_writer.end -= abs_amt;
+                            self.buffered_writer.end -= std.math.cast(usize, abs_amt) orelse std.math.maxInt(usize);
                         } else {
                             self.buffered_writer.flush() catch {
                                 return error.Unseekable;

@@ -8,11 +8,7 @@ This is a work in progress library to create, process, read and write different 
 
 ## Install & Build
 
-This library uses zig nominated [2024.11.0-mach](https://machengine.org/about/nominated-zig/). To install using [`zigup`](https://github.com/marler8997/zigup):
-
-```sh
-zigup 0.14.0-dev.2577+271452d22
-```
+This library currently uses zig [0.14.1](https://ziglang.org/download/), we do plan to go back to using mach nominated zig until a newer version than 0.14.1 will be nominated.
 
 ### Use zigimg in your project
 
@@ -69,7 +65,7 @@ zig build test
 | Farbfeld      | ✔️            | ✔️            |
 | GIF           | ✔️            | ❌            |
 | ICO           | ❌            | ❌            |
-| IFF           | ✔️             | ❌            |
+| IFF           | ✔️            | ❌            |
 | JPEG          | ✔️ (Partial)  | ❌            |
 | PAM           | ✔️            | ✔️            |
 | PBM           | ✔️            | ✔️            |
@@ -78,9 +74,10 @@ zig build test
 | PNG           | ✔️            | ✔️ (Partial)  |
 | PPM           | ✔️ (Partial)  | ✔️ (Partial)  |
 | QOI           | ✔️            | ✔️            |
-| SUN           | ✔️ (Partial)  | ❌            |
+| SGI           | ✔️            | ❌            |
+| SUN           | ✔️            | ❌            |
 | TGA           | ✔️            | ✔️            |
-| TIFF          | ❌            | ❌            |
+| TIFF          | ✔️ (Partial)  | ❌            |
 | XBM           | ❌            | ❌            |
 | XPM           | ❌            | ❌            |
 
@@ -143,7 +140,7 @@ Currently, this only supports a subset of PAMs where:
 
 * Support all pixel formats supported by PNG (grayscale, grayscale+alpha, indexed, truecolor, truecolor with alpha) in 8-bit or 16-bit.
 * Support the mininal chunks in order to decode the image.
-* Not all images in Png Test Suite is covered but should be good enough for now.
+* Can write all supported pixel formats but writing interlaced images is not supported yet.
 
 ### PPM - Portable Pixmap format
 
@@ -154,15 +151,40 @@ Currently, this only supports a subset of PAMs where:
 
 * Imported from https://github.com/MasterQ32/zig-qoi with blessing of the author
 
+### SGI - Silicon Graphics Image
+
+* Supports 8-bit, RGB (24/48-bit), RGBA(32/64-bit) files
+* Supports RLE and uncompressed files
+
 ### SUN - Sun Raster format
 
-* Only supports uncompressed 24-bit (RGB24/BGR24)
+* Supports 1/8/24/32-bit files
+* Supports uncompressed & RLE files
+* Supports BGR/RGB encoding
+* TIFF/IFF/Experimental encoding is not supported
 
 ### TGA - Truevision TGA format
 
 * Supports uncompressed and compressed 8-bit grayscale, indexed with 16-bit and 24-bit colormap, truecolor with 16-bit(RGB555), 24-bit or 32-bit bit depth.
 * Supports reading version 1 and version 2
 * Supports writing version 2
+
+### TIFF - Tagged Image File Format
+
+#### What's supported:
+* bilevel, grayscale, palette and RGB(A) files
+* most _baseline_ tags
+* Raw, LZW, Deflate, PackBits, CCITT 1D files
+* big-endian (MM) and little-endian (II) files should both be decoded fine
+
+#### What's missing:
+* Tile-based files are not supported
+* YCbCr, CMJN and CIE Lab files are not supported
+* JPEG, CCITT Fax 3 / 4 are not supported yet
+
+#### Notes
+* Only the first IFD is decoded
+* Orientation tag is not supported yet
 
 ## Supported Pixel formats
 
@@ -257,7 +279,7 @@ For a single image, they are two ways to get access to the pixel data.
 
 ### Accessing a specific format directly
 
-Yu can access the pixel data directly using `Image.pixels`. `pixels` is an union of all supported pixel formats.
+You can access the pixel data directly using `Image.pixels`. `pixels` is an union of all supported pixel formats.
 
 For RGB pixel formats, just use the pixel format enum value and addresss the data directly.
 ```zig
@@ -591,7 +613,7 @@ pub fn example(allocator: std.mem.Allocator) !void {
     var palette_storage: [256]zigimg.color.Rgba32 = undefined;
     const palette = quantizer.makePalette(255, palette_storage[0..]);
 
-    const palette_index = try quantizer.getPaletteIndex(zigimg.color.Rgba32.initRgba(110, 0, 0, 255));
+    const palette_index = try quantizer.getPaletteIndex(zigimg.color.Rgba32.from.rgba(110, 0, 0, 255));
 }
 ```
 
@@ -601,11 +623,11 @@ You can get a color from a HTML hex string. The alpha component is always last. 
 
 ```zig
 pub fn example() !void {
-    const rgb24 = try zigimg.color.Rgb24.fromHtmlHex("#123499");
-    const rgba32 = try zigimg.color.Rgba32.fromHtmlHex("FF000045");
+    const rgb24 = try zigimg.color.Rgb24.from.htmlHex("#123499");
+    const rgba32 = try zigimg.color.Rgba32.from.htmlHex("FF000045");
 
-    const red_rgb24 = try zigimg.color.Rgb24.fromHtmlHex("#F00");
-    const blue_rgba32 = try zigimg.clor.Rgba32.fromHtmlHex("#00FA");
+    const red_rgb24 = try zigimg.color.Rgb24.from.htmlHex("#F00");
+    const blue_rgba32 = try zigimg.color.Rgba32.from.htmlHex("#00FA");
 }
 ```
 
