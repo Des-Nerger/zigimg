@@ -308,7 +308,7 @@ fn readAllData(
         };
 
         for (palette, 0..) |entry, n| {
-            destination_palette[n] = color.Rgba32.initRgb(entry.r, entry.g, entry.b);
+            destination_palette[n] = color.Rgba32.from.rgb(entry.r, entry.g, entry.b);
         }
 
         try callPaletteProcessors(options, destination_palette);
@@ -983,8 +983,7 @@ pub fn CustomReaderOptions2(Processor1: type, Processor2: type) type {
 
 const root = @import("root");
 
-pub const NoopAllocator =
-    Allocator.VTable{ .alloc = undefined, .free = undefined, .remap = undefined, .resize = undefined };
+pub const NoopAllocator = Allocator.VTable{ .alloc = undefined, .free = undefined, .resize = undefined, .remap = undefined };
 
 /// Applications can override this by defining DefaultPngOptions struct in their root source file.
 /// We would like to use FixedBufferAllocator with memory from stack here since we should be able

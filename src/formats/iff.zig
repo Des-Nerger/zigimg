@@ -7,6 +7,7 @@ const utils = @import("../utils.zig");
 const std = @import("std");
 const PixelStorage = color.PixelStorage;
 const PixelFormat = @import("../pixel_format.zig").PixelFormat;
+const packbits = @import("../compressions/packbits.zig");
 
 const iff_description_length = 12;
 const IFFMagicHeader = "FORM";
@@ -49,6 +50,7 @@ pub const ChunkHeader = extern struct {
 
 pub const IlbmCompressionType = enum(u8) {
     none = 0,
+    // packbits compression
     byterun = 1,
     // Atari-ST files
     byterun2 = 2,
@@ -112,7 +114,7 @@ pub const BmhdHeader = extern struct {
     pub const HeaderSize = @sizeOf(BmhdHeader);
 
     pub fn debug(self: *const Self) void {
-        std.debug.print("Width: {}, Height: {}, planes: {}, compression: {}\n", .{ self.width, self.height, self.planes, self.compression_type });
+        std.log.debug("{}", .{self});
     }
 };
 
@@ -126,7 +128,7 @@ pub const DgblHeader = extern struct {
     const Self = @This();
 
     pub fn debug(self: *const Self) void {
-        std.debug.print("Width: {}, Height: {}, compression: {}\n", .{ self.width, self.height, self.compression_type });
+        std.log.debug("{}", .{self});
     }
 };
 
@@ -215,35 +217,7 @@ pub fn extendEhbPalette(palette: *utils.FixedStorage(color.Rgba32, 256)) void {
     for (0..32) |i| {
         const c = data[i];
         // EHB mode extends the palette to 64 colors by adding 32 darker colors
-        data[i + 32] = color.Rgba32.initRgb(c.r >> 1, c.g >> 1, c.b >> 1);
-    }
-}
-
-pub fn decodeByteRun1(stream: *ImageUnmanaged.Stream, tmp_buffer: []u8, length: u32) !void {
-    const reader = stream.reader();
-    var output_offset: u32 = 0;
-    var input_offset: u32 = 0;
-
-    while (input_offset < length - 1) {
-        const control: usize = try reader.readByte();
-        input_offset += 1;
-        if (control < 128) {
-            for (0..control + 1) |_| {
-                if (input_offset >= length) {
-                    return;
-                }
-                tmp_buffer[output_offset] = try reader.readByte();
-                output_offset += 1;
-                input_offset += 1;
-            }
-        } else if (control > 128) {
-            const value = try reader.readByte();
-            input_offset += 1;
-            for (0..257 - control) |_| {
-                tmp_buffer[output_offset] = value;
-                output_offset += 1;
-            }
-        }
+        data[i + 32] = color.Rgba32.from.rgb(c.r >> 1, c.g >> 1, c.b >> 1);
     }
 }
 
@@ -318,7 +292,6 @@ pub const IFF = struct {
         self.form_id = try getIffFormId(stream);
         self.header = try loadHeader(stream, self.form_id);
         self.pitch = (std.math.divCeil(u16, self.header.width(), 16) catch 0) * 2;
-        self.header.debug();
 
         const pixels = try self.decodeChunks(stream, allocator);
 
@@ -486,7 +459,7 @@ pub const IFF = struct {
 
         for (0..num_colors) |i| {
             const c = try utils.readStruct(reader, color.Rgb24, .little);
-            palette[i] = color.Rgba32.fromU32Rgb(c.toU32Rgb());
+            palette[i] = color.Rgba32.from.u32Rgb(c.to.u32Rgb());
         }
         self.cmap_bits = std.math.log2_int_ceil(usize, palette.len);
     }
@@ -532,7 +505,7 @@ pub const IFF = struct {
                     const reader = stream.reader();
                     _ = try reader.readAll(tmp_buffer);
                 } else {
-                    try decodeByteRun1(stream, tmp_buffer, chunk.length);
+                    try packbits.decode(stream, tmp_buffer, chunk.length);
                 }
             },
             IlbmCompressionType.byterun2 => try self.decodeByteRun2(stream, tmp_buffer, allocator),
@@ -571,13 +544,13 @@ pub const IFF = struct {
                     // Keep color: in HAM mode, current color
                     // may be based on previous color instead of coming from
                     // the palette.
-                    var previous_color = color.Rgb24.initRgb(0, 0, 0);
+                    var previous_color = color.Rgb24.from.rgb(0, 0, 0);
                     for (0..self.width()) |col| {
                         const index = (self.width() * row * pixel_size) + (col * pixel_size);
                         if (planes == 24) {
-                            previous_color = color.Rgb24.initRgb(chunky_buffer[index], chunky_buffer[index + 1], chunky_buffer[index + 2]);
+                            previous_color = color.Rgb24.from.rgb(chunky_buffer[index], chunky_buffer[index + 1], chunky_buffer[index + 2]);
                         } else if (chunky_buffer[index] < palette.len) {
-                            previous_color = color.Rgb24.fromU32Rgba(palette[chunky_buffer[index]].toU32Rgba());
+                            previous_color = color.Rgb24.from.u32Rgba(palette[chunky_buffer[index]].to.u32Rgba());
                         } else if (is_ham) {
                             // Get the control bit which will tell use how current pixel should be calculated
                             const control: u8 = (chunky_buffer[index] >> cmap_bits) & 0x3;

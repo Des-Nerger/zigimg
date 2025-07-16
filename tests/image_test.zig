@@ -394,6 +394,34 @@ test "Should detect RAS properly" {
     }
 }
 
+test "Should detect SGI properly" {
+    const image_tests = &[_][]const u8{
+        helpers.fixtures_path ++ "sgi/sample-rgb24.sgi",
+    };
+
+    for (image_tests) |image_path| {
+        const format = try ImageUnmanaged.detectFormatFromFilePath(image_path);
+        try std.testing.expect(format == .sgi);
+
+        var test_image = try helpers.testImageFromFile(image_path);
+        defer test_image.deinit();
+    }
+}
+
+test "Should detect TIFF properly" {
+    const image_tests = &[_][]const u8{
+        helpers.fixtures_path ++ "tiff/sample-monob-raw.tiff",
+    };
+
+    for (image_tests) |image_path| {
+        const format = try ImageUnmanaged.detectFormatFromFilePath(image_path);
+        try std.testing.expect(format == .tiff);
+
+        var test_image = try helpers.testImageFromFile(image_path);
+        defer test_image.deinit();
+    }
+}
+
 test "Should error on invalid file" {
     const invalidFile = helpers.testImageFromFile("tests/helpers.zig");
     try helpers.expectError(invalidFile, ImageError.Unsupported);
@@ -456,14 +484,14 @@ test "Test Colorf32 iterator" {
     defer test_image.deinit();
 
     const expectedColors = [_]color.Colorf32{
-        color.Colorf32.initRgb(1.0, 0.0, 0.0),
-        color.Colorf32.initRgb(0.0, 1.0, 0.0),
-        color.Colorf32.initRgb(0.0, 0.0, 1.0),
-        color.Colorf32.initRgb(0.0, 1.0, 1.0),
-        color.Colorf32.initRgb(1.0, 0.0, 1.0),
-        color.Colorf32.initRgb(1.0, 1.0, 0.0),
-        color.Colorf32.initRgb(0.0, 0.0, 0.0),
-        color.Colorf32.initRgb(1.0, 1.0, 1.0),
+        color.Colorf32.from.rgb(1.0, 0.0, 0.0),
+        color.Colorf32.from.rgb(0.0, 1.0, 0.0),
+        color.Colorf32.from.rgb(0.0, 0.0, 1.0),
+        color.Colorf32.from.rgb(0.0, 1.0, 1.0),
+        color.Colorf32.from.rgb(1.0, 0.0, 1.0),
+        color.Colorf32.from.rgb(1.0, 1.0, 0.0),
+        color.Colorf32.from.rgb(0.0, 0.0, 0.0),
+        color.Colorf32.from.rgb(1.0, 1.0, 1.0),
     };
 
     try helpers.expectEq(test_image.width, 8);
@@ -485,14 +513,14 @@ test "Convert Image from rgb24 to float32 (Colorf32)" {
     defer test_image.deinit();
 
     const expected_colors = [_]color.Colorf32{
-        color.Colorf32.initRgb(1.0, 0.0, 0.0),
-        color.Colorf32.initRgb(0.0, 1.0, 0.0),
-        color.Colorf32.initRgb(0.0, 0.0, 1.0),
-        color.Colorf32.initRgb(0.0, 1.0, 1.0),
-        color.Colorf32.initRgb(1.0, 0.0, 1.0),
-        color.Colorf32.initRgb(1.0, 1.0, 0.0),
-        color.Colorf32.initRgb(0.0, 0.0, 0.0),
-        color.Colorf32.initRgb(1.0, 1.0, 1.0),
+        color.Colorf32.from.rgb(1.0, 0.0, 0.0),
+        color.Colorf32.from.rgb(0.0, 1.0, 0.0),
+        color.Colorf32.from.rgb(0.0, 0.0, 1.0),
+        color.Colorf32.from.rgb(0.0, 1.0, 1.0),
+        color.Colorf32.from.rgb(1.0, 0.0, 1.0),
+        color.Colorf32.from.rgb(1.0, 1.0, 0.0),
+        color.Colorf32.from.rgb(0.0, 0.0, 0.0),
+        color.Colorf32.from.rgb(1.0, 1.0, 1.0),
     };
 
     try helpers.expectEq(test_image.width, 8);
